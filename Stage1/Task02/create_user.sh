@@ -32,6 +32,8 @@ touch $SECURE_PASSWORD_FILE
 # Process the input file
 while IFS=';' read -r username groups; 
 do
+  username=$(echo "$username" | xargs)  
+  groups=$(echo "$groups" | xargs)     
   # Check if the user already exists
   if id -u "$username" >/dev/null 2>&1; 
   then
