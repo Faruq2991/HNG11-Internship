@@ -1,0 +1,8 @@
+faruq; dev,ops,www,root
+hauwa; ops,www
+aliyu; dev,root
+ukasha; ops,dev,www
+juwwy; dev,www
+usama; ops,root
+humrah; dev
+aisha; www
