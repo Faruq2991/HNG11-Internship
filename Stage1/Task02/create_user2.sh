@@ -1,10 +1,9 @@
 #!/bin/bash
 
-# Check for root privileges
-if [[ $EUID -ne 0 ]]; then
-   echo "This script must be run as root" 
-   exit 1
-fi
+# Number of users to generate
+NUM_USERS=${NUM_USERS:-10}
+# Output file for generated usernames and groups
+OUTPUT_FILE=${OUTPUT_FILE:-generated_users.txt}
 
 generate_random_string() {
   local LENGTH=$1
@@ -16,7 +15,7 @@ GROUPS=("dev" "ops" "www" "admin" "support")
 
 # Function to generate random groups for a user
 generate_random_groups() {
-  local NUM_GROUPS=$(shuf -i 1-5 -n 1)  # Random number of groups between 1 and 4
+  local NUM_GROUPS=$(shuf -i 1-4 -n 1)  # Random number of groups between 1 and 4
   local SELECTED_GROUPS=()
   while [ ${#SELECTED_GROUPS[@]} -lt $NUM_GROUPS ]; do
     local GROUP=${GROUPS[$RANDOM % ${#GROUPS[@]}]}
@@ -41,7 +40,7 @@ echo "Random usernames and groups have been generated in $OUTPUT_FILE"
 # and log all actions. 
 
 # Input file containing usernames and groups
-INPUT_FILE="employee_data.txt"
+INPUT_FILE=$OUTPUT_FILE
 
 # Log file
 LOG_FILE="/var/log/user_management.log"
@@ -67,10 +66,11 @@ mkdir -p $(dirname $SECURE_PASSWORD_FILE)
 touch $SECURE_PASSWORD_FILE
 
 # Process the input file
-while IFS=';' read -r username groups; 
+while IFS=';' read -r username group; 
 do
   username=$(echo "$username" | xargs)  
-  groups=$(echo "$groups" | xargs)     
+  group=$(echo "$group" | xargs)     
+
   # Check if the user already exists
   if id -u "$username" >/dev/null 2>&1; 
   then
@@ -78,26 +78,21 @@ do
     continue
   fi
 
-  # Create groups if they do not exist
-  IFS=',' read -ra GROUP_LIST <<< "$groups"
-  for group in "${GROUP_LIST[@]}"; 
-  do
-    if ! getent group "$group" >/dev/null 2>&1; 
-    
-    then
-      groupadd "$group"
-      echo "Group $group created." | tee -a $LOG_FILE
-    fi
-  done
+  # Create group if it does not exist
+  if ! getent group "$group" >/dev/null 2>&1; 
+  then
+    groupadd "$group"
+    echo "Group $group created." | tee -a $LOG_FILE
+  fi
 
-  # Create the user with the specified groups
-  useradd -m -G "$groups" "$username"
+  # Create the user with the specified group
+  useradd -m -G "$group" "$username"
   if [[ $? -ne 0 ]]; 
   then
     echo "Failed to create user $username." | tee -a $LOG_FILE
     continue
   fi
-  echo "User $username created with groups $groups." | tee -a $LOG_FILE
+  echo "User $username created with group $group." | tee -a $LOG_FILE
 
   # Generate a random password for the user
   password=$(generate_password)
@@ -121,9 +116,3 @@ do
 done < "$INPUT_FILE"
 
 echo "User creation process completed." | tee -a $LOG_FILE
-
-# At the end of the script
-echo "User creation process completed. Passwords are stored in $SECURE_PASSWORD_FILE."
-echo "Please change these passwords immediately and delete the file."
-echo "Backups of /etc/passwd and /etc/group were created before modifications."
-
