@@ -1,129 +1,109 @@
 #!/bin/bash
 
-# Check for root privileges
-if [[ $EUID -ne 0 ]]; then
-   echo "This script must be run as root" 
-   exit 1
-fi
+# Declare the arrays to hold user and groups data
+declare -a users
+declare -a groups
 
-generate_random_string() {
-  local LENGTH=$1
-  tr -dc A-Za-z0-9 </dev/urandom | head -c "$LENGTH"
-}
-
-# Predefined group names
-GROUPS=("dev" "ops" "www" "admin" "support")
-
-# Function to generate random groups for a user
-generate_random_groups() {
-  local NUM_GROUPS=$(shuf -i 1-5 -n 1)  # Random number of groups between 1 and 4
-  local SELECTED_GROUPS=()
-  while [ ${#SELECTED_GROUPS[@]} -lt $NUM_GROUPS ]; do
-    local GROUP=${GROUPS[$RANDOM % ${#GROUPS[@]}]}
-    if [[ ! " ${SELECTED_GROUPS[@]} " =~ " $GROUP " ]]; then
-      SELECTED_GROUPS+=("$GROUP")
-    fi
-  done
-  echo "${SELECTED_GROUPS[*]}"
-}
-
-# Generate random usernames and assign random groups
-> "$OUTPUT_FILE"
-for ((i = 1; i <= NUM_USERS; i++)); do
-  username="user_$(generate_random_string 6)"
-  group="${GROUPS[$RANDOM % ${#GROUPS[@]}]}"
-  echo "$username;$group" >> "$OUTPUT_FILE"
-done
-
-echo "Random usernames and groups have been generated in $OUTPUT_FILE"
-
-# Script to create users and groups from a file, set up home directories, generate passwords,
-# and log all actions. 
-
-# Input file containing usernames and groups
-INPUT_FILE="employee_data.txt"
-
-# Log file
-LOG_FILE="/var/log/user_management.log"
-
-# Secure file to store passwords
-SECURE_PASSWORD_FILE="/var/secure/user_passwords.txt"
-
-# Check if the input file exists
-if [[ ! -f $INPUT_FILE ]]; 
-then
-  echo "Input file $INPUT_FILE not found!" | tee -a $LOG_FILE
+# Check if the script is run with exactly one argument
+if [[ $# -ne 1 ]]; then
+  echo "Usage: $0 <input_file>"
   exit 1
 fi
 
-# Function to generate a random password
-generate_password() {
-  tr -dc A-Za-z0-9 </dev/urandom | head -c 16
+# The input file
+input_file="$1"
+
+# Confirming the input file
+echo "Reading input file: $input_file"
+
+function read_input() {
+  local file="$1"
+
+  # Check if file exists
+  if [[ ! -f "$file" ]]; then
+    echo "File not found!"
+    return 1
+  fi
+
+  while IFS= read -r line; do
+    user=$(echo "$line" | cut -d';' -f1)
+    groups_list=$(echo "$line" | cut -d';' -f2 | tr -d '[:space:]')
+    users+=("$user")
+    groups+=("$groups_list")
+  done < "$file"
 }
 
-# Ensure the log and password files exist
-touch $LOG_FILE
-mkdir -p $(dirname $SECURE_PASSWORD_FILE)
-touch $SECURE_PASSWORD_FILE
+# Call the function with the input file
+read_input "$input_file"
 
-# Process the input file
-while IFS=';' read -r username groups; 
+# Print the arrays for verification
+echo "Users: ${users[@]}"
+echo "Groups: ${groups[@]}"
+
+log_file="/var/log/user_management.log"
+password_file="/var/secure/user_passwords.csv"
+
+touch $log_file
+mkdir -p $(dirname $password_file)
+touch $password_file
+
+# Write CSV header
+echo "Username,Password" > $password_file
+
+for (( i = 0; i < ${#users[@]}; i++ )); 
 do
-  username=$(echo "$username" | xargs)  
-  groups=$(echo "$groups" | xargs)     
-  # Check if the user already exists
-  if id -u "$username" >/dev/null 2>&1; 
-  then
-    echo "User $username already exists. Skipping creation." | tee -a $LOG_FILE
-    continue
-  fi
-
-  # Create groups if they do not exist
-  IFS=',' read -ra GROUP_LIST <<< "$groups"
-  for group in "${GROUP_LIST[@]}"; 
-  do
-    if ! getent group "$group" >/dev/null 2>&1; 
-    
-    then
-      groupadd "$group"
-      echo "Group $group created." | tee -a $LOG_FILE
+  user="${users[$i]}"
+  user_groups="${groups[$i]}"
+  if id "$user" &>/dev/null; then
+    echo "User $user exists. Not duplicated" | tee -a "$log_file"
+  else
+    # Create user
+    useradd -m -s /bin/bash "$user"
+    if [[ $? -ne 0 ]]; then
+      echo "Failed to create user $user" | tee -a "$log_file"
+      exit 1
     fi
-  done
+    echo "User $user created" | tee -a "$log_file"
 
-  # Create the user with the specified groups
-  useradd -m -G "$groups" "$username"
-  if [[ $? -ne 0 ]]; 
-  then
-    echo "Failed to create user $username." | tee -a $LOG_FILE
-    continue
+    password=$(openssl rand -base64 50 | tr -dc 'A-Za-z0-9!?%=' | head -c 10)
+    echo "$user:$password" | chpasswd
+    if [[ $? -ne 0 ]]; then
+      echo "Failed to set password for $user" | tee -a "$log_file"
+      exit 1
+    fi
+    echo "Password for $user set" | tee -a "$log_file"
+    echo "$user,$password" >> "$password_file"
+
+    # Add user to personal group
+    usermod -aG "$user" "$user"
+    if [[ $? -ne 0 ]]; then
+      echo "Failed to add $user to $user group" | tee -a "$log_file"
+      exit 1
+    fi
+    echo "Added $user to $user group" | tee -a "$log_file"
+
+    # Process additional groups
+    IFS=',' read -ra GROUP_LIST <<< "$user_groups"
+    for group in "${GROUP_LIST[@]}"; do
+      if grep -q "^$group:" /etc/group; then
+        echo "Group $group exists" | tee -a "$log_file"
+      else
+        echo "Group $group does not exist, creating $group" | tee -a "$log_file"
+        groupadd "$group"
+        if [[ $? -ne 0 ]]; then
+          echo "Failed to create group $group" | tee -a "$log_file"
+          exit 1
+        fi
+      fi
+
+      usermod -aG "$group" "$user"
+      if [[ $? -ne 0 ]]; then
+        echo "Failed to add $user to $group group" | tee -a "$log_file"
+        exit 1
+      fi
+      echo "Added $user to $group group" | tee -a "$log_file"
+    done
   fi
-  echo "User $username created with groups $groups." | tee -a $LOG_FILE
+done
 
-  # Generate a random password for the user
-  password=$(generate_password)
-  echo "$username:$password" | chpasswd
-  if [[ $? -ne 0 ]]; 
-  then
-    echo "Failed to set password for user $username." | tee -a $LOG_FILE
-    continue
-  fi
-
-  # Securely store the generated password
-  echo "$username:$password" >> $SECURE_PASSWORD_FILE
-  chmod 600 $SECURE_PASSWORD_FILE
-
-  # Set the appropriate permissions for the home directory
-  chmod 700 "/home/$username"
-  chown "$username:$username" "/home/$username"
-
-  echo "Password for user $username generated and stored securely." | tee -a $LOG_FILE
-
-done < "$INPUT_FILE"
-
-echo "User creation process completed." | tee -a $LOG_FILE
-
-# At the end of the script
-echo "User creation process completed. Passwords are stored in $SECURE_PASSWORD_FILE."
-echo "Please change these passwords immediately and delete the file."
-echo "Backups of /etc/passwd and /etc/group were created before modifications."
-
+echo "Process successfully  completed." | tee -a "$log_file"
