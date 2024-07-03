@@ -1,109 +1,78 @@
 #!/bin/bash
 
-# Declare the arrays to hold user and groups data
-declare -a users
-declare -a groups
+set -euo pipefail
 
-# Check if the script is run with exactly one argument
-if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 <input_file>"
-  exit 1
-fi
-
-# The input file
-input_file="$1"
-
-# Confirming the input file
-echo "Reading input file: $input_file"
-
-function read_input() {
-  local file="$1"
-
-  # Check if file exists
-  if [[ ! -f "$file" ]]; then
-    echo "File not found!"
-    return 1
-  fi
-
-  while IFS= read -r line; do
-    user=$(echo "$line" | cut -d';' -f1)
-    groups_list=$(echo "$line" | cut -d';' -f2 | tr -d '[:space:]')
-    users+=("$user")
-    groups+=("$groups_list")
-  done < "$file"
+usage() {
+    echo "Usage: $0 <input_file>"
+    exit 1
 }
 
-# Call the function with the input file
-read_input "$input_file"
+[[ $# -ne 1 ]] && usage
 
-# Print the arrays for verification
-echo "Users: ${users[@]}"
-echo "Groups: ${groups[@]}"
-
+input_file="$1"
 log_file="/var/log/user_management.log"
-password_file="/var/secure/user_passwords.csv"
+password_file="/var/secure/user_passwords.txt"
 
-touch $log_file
-mkdir -p $(dirname $password_file)
-touch $password_file
+log() {
+    echo "$1" | tee -a "$log_file"
+}
 
-# Write CSV header
-echo "Username,Password" > $password_file
+setup_files() {
+    mkdir -p "$(dirname "$log_file")" "$(dirname "$password_file")"
+    touch "$log_file" "$password_file"
+}
 
-for (( i = 0; i < ${#users[@]}; i++ )); 
-do
-  user="${users[$i]}"
-  user_groups="${groups[$i]}"
-  if id "$user" &>/dev/null; then
-    echo "User $user exists. Not duplicated" | tee -a "$log_file"
-  else
-    # Create user
-    useradd -m -s /bin/bash "$user"
-    if [[ $? -ne 0 ]]; then
-      echo "Failed to create user $user" | tee -a "$log_file"
-      exit 1
+create_user() {
+    local user="$1"
+    local groups="$2"
+
+    # Check for empty or invalid username
+    if [[ -z "$user" || "$user" =~ [^a-zA-Z0-9_-] ]]; then
+        log "Invalid or empty username: '$user'. Skipped."
+        return
     fi
-    echo "User $user created" | tee -a "$log_file"
 
+    if id "$user" &>/dev/null; then
+        log "User $user already exists, skipped"
+        return
+    fi
+
+    useradd -m -s /bin/bash "$user" && log "User $user created"
+
+    local password
     password=$(openssl rand -base64 50 | tr -dc 'A-Za-z0-9!?%=' | head -c 10)
-    echo "$user:$password" | chpasswd
-    if [[ $? -ne 0 ]]; then
-      echo "Failed to set password for $user" | tee -a "$log_file"
-      exit 1
-    fi
-    echo "Password for $user set" | tee -a "$log_file"
+    echo "$user,$password" | chpasswd && log "Password for $user set"
     echo "$user,$password" >> "$password_file"
 
-    # Add user to personal group
-    usermod -aG "$user" "$user"
-    if [[ $? -ne 0 ]]; then
-      echo "Failed to add $user to $user group" | tee -a "$log_file"
-      exit 1
-    fi
-    echo "Added $user to $user group" | tee -a "$log_file"
+    manage_group "$user" "$user"
 
-    # Process additional groups
-    IFS=',' read -ra GROUP_LIST <<< "$user_groups"
-    for group in "${GROUP_LIST[@]}"; do
-      if grep -q "^$group:" /etc/group; then
-        echo "Group $group exists" | tee -a "$log_file"
-      else
-        echo "Group $group does not exist, creating $group" | tee -a "$log_file"
-        groupadd "$group"
-        if [[ $? -ne 0 ]]; then
-          echo "Failed to create group $group" | tee -a "$log_file"
-          exit 1
-        fi
-      fi
-
-      usermod -aG "$group" "$user"
-      if [[ $? -ne 0 ]]; then
-        echo "Failed to add $user to $group group" | tee -a "$log_file"
-        exit 1
-      fi
-      echo "Added $user to $group group" | tee -a "$log_file"
+    IFS=',' read -ra group_array <<< "$groups"
+    for group in "${group_array[@]}"; do
+        [[ -n "$group" ]] && manage_group "$user" "$group"
     done
-  fi
-done
+}
 
-echo "Process successfully  completed." | tee -a "$log_file"
+manage_group() {
+    local user="$1"
+    local group="$2"
+
+    # Check for empty or invalid group name
+    if [[ -z "$group" || "$group" =~ [^a-zA-Z0-9_-] ]]; then
+        log "Invalid or empty group name: '$group' for user '$user'. Skipped."
+        return
+    fi
+
+    if ! grep -q "^$group:" /etc/group; then
+        groupadd "$group" && log "Group $group created"
+    else
+        log "Group $group already exists"
+    fi
+
+    usermod -aG "$group" "$user" && log "Added $user to $group group"
+}
+
+setup_files
+
+while IFS=';' read -r user groups || [[ -n "$user" ]]; do
+    create_user "$user" "$(echo "$groups" | tr -d '[:space:]')"
+done < "$input_file"

@@ -1,6 +1,6 @@
 # HNG11-Internship
 
-# User and Group Management Script
+## User and Group Management Script
 
 This script automates the creation of users and groups on a Linux system. It reads a list of users and their respective groups from an input file, creates the users and groups if they do not already exist, sets up home directories, assigns random passwords, and logs all actions. Additionally, the generated passwords are securely stored in a CSV file.
 
@@ -21,8 +21,7 @@ This script automates the creation of users and groups on a Linux system. It rea
 
 The script requires an input file (`ninput.txt`) with the following format:
 
-```
-username;group1,group2
+```username;group1,group2
 ```
 
 Each line should contain a username followed by a semicolon and a comma-separated list of groups.
@@ -33,7 +32,7 @@ Each line should contain a username followed by a semicolon and a comma-separate
 2. Run the script with the input file as an argument:
 
    ```bash
-sudo ./create_users.sh input.txt
+        sudo ./create_users.sh input.txt
    ```
 
 ## Script Workflow
@@ -51,9 +50,8 @@ sudo ./create_users.sh input.txt
 
 Input file (`input.txt`):
 
-```
-alice;dev,ops
-bob;admin,dev,www-data
+```alice;dev,ops
+    bob;admin,dev,www-data
 ```
 
 Running the script:
